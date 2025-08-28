@@ -1,0 +1,90 @@
+#!/usr/bin/python
+import argparse
+import shutil
+import subprocess
+from pathlib import Path
+import sys
+import traceback
+
+def find_ods_files(root: Path):
+    return list(root.rglob("*.ods"))
+
+def convert_with_soffice(input_path: Path, output_path: Path, verbose=False):
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        raise FileNotFoundError("soffice (LibreOffice) not found in PATH")
+
+    outdir = output_path.parent
+    # Use --headless and --convert-to xlsx
+    cmd = [
+        soffice,
+        "--headless",
+        "--convert-to", "xlsx",
+        "--outdir", str(outdir),
+        str(input_path)
+    ]
+    if verbose:
+        print("Running:", " ".join(cmd))
+    completed = subprocess.run(cmd, capture_output=True, text=True)
+    if completed.returncode != 0:
+        raise RuntimeError(f"soffice conversion failed: {completed.returncode}\n{completed.stdout}\n{completed.stderr}")
+
+    expected = outdir / (input_path.stem + ".xlsx")
+    if not expected.exists():
+        raise FileNotFoundError(f"Expected output not found after soffice conversion: {expected}")
+    if expected.resolve() != output_path.resolve():
+        expected.replace(output_path)
+
+
+def convert_file(input_path: Path, overwrite=False, verbose=False):
+    input_path = input_path.resolve()
+    output_path = input_path.with_suffix(".xlsx")
+    if output_path.exists() and not overwrite:
+        if verbose:
+            print(f"Skipping (exists): {input_path} -> {output_path}")
+        return "skipped"
+
+    try:
+        if verbose:
+            print(f"Converting with LibreOffice: {input_path}")
+        convert_with_soffice(input_path, output_path, verbose=verbose)
+        if verbose:
+            print(f"Converted (soffice): {input_path} -> {output_path}")
+        return "soffice"
+    except Exception as e:
+        if verbose:
+            print(f"LibreOffice conversion failed for {input_path}: {e}")
+            if verbose:
+                traceback.print_exc()
+            return "failed"
+
+def main():
+    parser = argparse.ArgumentParser(description="Recursively convert .ods to .xlsx in cwd")
+    parser.add_argument("--overwrite", "-o", action="store_true", help="overwrite existing .xlsx files")
+    parser.add_argument("--verbose", "-v", action="store_true", help="verbose output")
+    parser.add_argument("--root", "-r", type=str, default=".", help="root directory to scan (default: current working dir)")
+    args = parser.parse_args()
+
+    root = Path(args.root).resolve()
+    print(f"Scanning for .ods files under: {root}")
+    ods_files = find_ods_files(root)
+    print(f"Found {len(ods_files)} .ods file(s).")
+
+    stats = {"soffice":0, "skipped":0, "failed":0}
+    for p in ods_files:
+        if args.verbose:
+            print(f"\nProcessing: {p}")
+        result = convert_file(p, overwrite=args.overwrite, verbose=args.verbose)
+        if result in stats:
+            stats[result] += 1
+        else:
+            stats["failed"] += 1
+
+    print("\nDone.")
+    print(f"Converted with soffice: {stats['soffice']}")
+    print(f"Skipped (exists):       {stats['skipped']}")
+    print(f"Failed:                 {stats['failed']}")
+
+if __name__ == "__main__":
+    main()
+
